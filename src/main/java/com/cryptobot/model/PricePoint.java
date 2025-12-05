@@ -1,5 +1,5 @@
 package com.cryptobot.model;
 
-import java.time.ZonedDateTime;
+import java.time.Instant;
 
-public record PricePoint(ZonedDateTime dateTime, double price) {}
+public record PricePoint(Instant dateTime, double price) {}

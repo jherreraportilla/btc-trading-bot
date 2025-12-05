@@ -8,6 +8,8 @@ import org.ta4j.core.indicators.RSIIndicator;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
 
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 
 @Service
@@ -40,7 +42,7 @@ public class SignalEvaluatorService {
         }
     }
 
-    // ✅ Calcular solo el RSI actual
+    // ✅ Calcular RSI actual
     public double calculateRSI(List<PricePoint> prices) {
 
         if (prices == null || prices.size() < 15) return -1;
@@ -50,9 +52,12 @@ public class SignalEvaluatorService {
         BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
 
         for (PricePoint p : prices) {
+
+            ZonedDateTime zdt = p.dateTime().atZone(ZoneId.of("UTC"));
+
             series.addBar(
                     Duration.ofHours(1),
-                    p.dateTime(),
+                    zdt,
                     p.price(),
                     p.price(),
                     p.price(),
@@ -68,7 +73,7 @@ public class SignalEvaluatorService {
         return Double.isNaN(rsi) ? -1 : rsi;
     }
 
-    // ✅ Señal clásica BUY/SELL/HOLD
+    // ✅ Señal clásica BUY / SELL / HOLD
     public Signal evaluateRsiSignal(List<PricePoint> prices) {
 
         if (prices == null || prices.size() < 15) {
@@ -84,9 +89,12 @@ public class SignalEvaluatorService {
         BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
 
         for (PricePoint p : prices) {
+
+            ZonedDateTime zdt = p.dateTime().atZone(ZoneId.of("UTC"));
+
             series.addBar(
                     Duration.ofHours(1),
-                    p.dateTime(),
+                    zdt,
                     p.price(),
                     p.price(),
                     p.price(),
@@ -98,16 +106,16 @@ public class SignalEvaluatorService {
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
         RSIIndicator rsiIndicator = new RSIIndicator(closePrice, 14);
 
-        double rsi_value = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
+        double rsiValue = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
         double currentPrice = prices.get(prices.size() - 1).price();
 
-        if (Double.isNaN(rsi_value)) {
+        if (Double.isNaN(rsiValue)) {
             return new Signal(Signal.Type.HOLD, -1, currentPrice);
         }
 
-        if (rsi_value < 30) return new Signal(Signal.Type.BUY, rsi_value, currentPrice);
-        if (rsi_value > 70) return new Signal(Signal.Type.SELL, rsi_value, currentPrice);
+        if (rsiValue < 30) return new Signal(Signal.Type.BUY, rsiValue, currentPrice);
+        if (rsiValue > 70) return new Signal(Signal.Type.SELL, rsiValue, currentPrice);
 
-        return new Signal(Signal.Type.HOLD, rsi_value, currentPrice);
+        return new Signal(Signal.Type.HOLD, rsiValue, currentPrice);
     }
 }
