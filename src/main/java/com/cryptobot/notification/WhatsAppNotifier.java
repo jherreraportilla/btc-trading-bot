@@ -13,7 +13,9 @@ public class WhatsAppNotifier {
     private static final String URL_BASE = "https://btc-whatsapp.onrender.com";
     private static final String API_KEY   = "nsYJm0M$k1C0F5G#HRsj";
     private static final String INSTANCE  = "default";
-    private static final String TU_NUMERO = "34671072929";
+
+    // ✅ JID REAL DEL GRUPO BOT-TRADIN
+    private static final String GROUP_ID = "120363404627482611@g.us";
 
     // ✅ HttpClient reutilizable
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -28,7 +30,7 @@ public class WhatsAppNotifier {
                     "text": "%s",
                     "options": {"delay": 1200}
                 }
-                """.formatted(TU_NUMERO, mensaje.replace("\"", "\\\""));
+                """.formatted(GROUP_ID, mensaje.replace("\"", "\\\""));
 
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -40,12 +42,11 @@ public class WhatsAppNotifier {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-            // ✅ Validación de respuesta
             if (response.statusCode() != 200) {
                 System.err.println("WhatsApp API error: " + response.statusCode());
                 System.err.println("Respuesta: " + response.body());
             } else {
-                System.out.println("✅ Alerta enviada a WhatsApp");
+                System.out.println("✅ Mensaje enviado al grupo BOT-TRADIN");
             }
 
         } catch (Exception e) {
