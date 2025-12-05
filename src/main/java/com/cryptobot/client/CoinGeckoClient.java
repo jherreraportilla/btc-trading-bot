@@ -22,32 +22,35 @@ public class CoinGeckoClient {
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // ✅ Variables de caché
+    // ✅ Caché para evitar rate limits
     private List<PricePoint> cachedPrices;
     private Instant lastFetchTime;
 
     public List<PricePoint> getLastHourlyPrices(int hours) throws Exception {
 
-        // ✅ Si tenemos datos recientes (< 55 minutos), devolvemos la caché
+        // ✅ Si tenemos datos recientes (< 55 min), devolvemos caché
         if (cachedPrices != null && lastFetchTime != null &&
                 Duration.between(lastFetchTime, Instant.now()).toMinutes() < 55) {
             return cachedPrices;
         }
 
-        // ✅ Llamada real a CoinGecko
+        // ✅ CoinGecko exige mínimo 2 días para datos horarios
+        double days = Math.max(2, hours / 24.0);
+
         String url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart" +
-                "?vs_currency=usd&days=" + (hours / 24.0) + "&interval=hourly";
+                "?vs_currency=usd&days=" + days;
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .timeout(Duration.ofSeconds(15))
                 .build();
 
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response =
+                httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        // ✅ Manejo del rate limit
+        // ✅ Manejo de rate limit (429)
         if (response.statusCode() == 429) {
-            System.out.println("Rate limit alcanzado. Usando datos en caché si existen.");
+            System.out.println("Rate limit alcanzado. Usando caché si existe.");
 
             if (cachedPrices != null) {
                 return cachedPrices;
@@ -56,21 +59,38 @@ public class CoinGeckoClient {
             }
         }
 
-        if (response.statusCode() != 200) {
-            throw new RuntimeException("CoinGecko error: " + response.statusCode() + " " + response.body());
+        // ✅ Manejo de error 401 (interval=hourly prohibido)
+        if (response.statusCode() == 401) {
+            System.out.println("CoinGecko 401: revisa parámetros. Usando caché si existe.");
+
+            if (cachedPrices != null) {
+                return cachedPrices;
+            } else {
+                throw new RuntimeException("CoinGecko 401 y no hay caché disponible.");
+            }
         }
 
+        // ✅ Otros errores
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("CoinGecko error: " +
+                    response.statusCode() + " " + response.body());
+        }
+
+        // ✅ Parseo de JSON
         JsonNode prices = objectMapper.readTree(response.body()).get("prices");
         List<PricePoint> result = new ArrayList<>();
 
         for (JsonNode node : prices) {
             long timestamp = node.get(0).asLong();
             double price = node.get(1).asDouble();
-            ZonedDateTime dateTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("UTC"));
+
+            ZonedDateTime dateTime =
+                    ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("UTC"));
+
             result.add(new PricePoint(dateTime, price));
         }
 
-        // ✅ Guardamos en caché
+        // ✅ Guardar en caché
         cachedPrices = result;
         lastFetchTime = Instant.now();
 
