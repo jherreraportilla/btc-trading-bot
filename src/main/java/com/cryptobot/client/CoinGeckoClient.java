@@ -2,11 +2,8 @@ package com.cryptobot.client;
 
 import com.cryptobot.model.PricePoint;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,107 +14,74 @@ public class CoinGeckoClient {
     private static final String URL =
             "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=2";
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final RestTemplate restTemplate = new RestTemplate();
 
-    // ✅ Caché persistente
-    private List<PricePoint> cachedPrices = null;
-    private Instant lastFetchTime = Instant.EPOCH;
+    // ✅ Caché interna para evitar llamadas repetidas
+    private List<PricePoint> cachedPrices = new ArrayList<>();
+    private Instant lastCacheUpdate = Instant.EPOCH;
 
-    // ✅ TTL de caché (minutos)
-    private static final long CACHE_TTL_MINUTES = 25;
-
-    // ✅ Reintentos
-    private static final int MAX_RETRIES = 3;
-    private static final int[] BACKOFF_SECONDS = {1, 3, 5};
+    // ✅ Cooldown global si CoinGecko devuelve 429
+    private Instant lastRateLimitHit = null;
 
     public List<PricePoint> getLastHourlyPrices(int hours) {
 
-        // ✅ 1. Usar caché si está fresca
-        if (cachedPrices != null &&
-                Instant.now().minusSeconds(CACHE_TTL_MINUTES * 60)
-                        .isBefore(lastFetchTime)) {
-
-            System.out.println("✅ Usando caché CoinGecko (válida)");
+        // ✅ 1. Cooldown si hubo rate limit reciente
+        if (lastRateLimitHit != null &&
+                Instant.now().minusSeconds(120).isBefore(lastRateLimitHit)) {
+            System.out.println("⏳ Cooldown activo, devolviendo caché");
             return cachedPrices;
         }
 
-        // ✅ 2. Intentar obtener datos con reintentos
-        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // ✅ 2. Si la caché tiene menos de 10 minutos → usarla
+        if (Instant.now().minusSeconds(600).isBefore(lastCacheUpdate)) {
+            return cachedPrices;
+        }
 
+        // ✅ 3. Intentos con backoff exponencial
+        int[] delays = {2000, 5000, 10000}; // 2s, 5s, 10s
+
+        for (int i = 0; i < delays.length; i++) {
             try {
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(URL))
-                        .GET()
-                        .build();
+                var response = restTemplate.getForObject(URL, CoinGeckoResponse.class);
 
-                HttpResponse<String> response =
-                        httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                // ✅ Manejo de rate limit
-                if (response.statusCode() == 429) {
-                    System.out.println("⚠️ CoinGecko rate limit (429). Intento " + attempt);
-                    waitBackoff(attempt);
-                    continue;
+                if (response == null || response.prices() == null) {
+                    throw new RuntimeException("Respuesta inválida de CoinGecko");
                 }
 
-                // ✅ Manejo de errores HTTP
-                if (response.statusCode() != 200) {
-                    System.out.println("⚠️ Error HTTP CoinGecko: " + response.statusCode());
-                    waitBackoff(attempt);
-                    continue;
-                }
+                List<PricePoint> prices = new ArrayList<>();
 
-                // ✅ Parsear respuesta
-                List<PricePoint> parsed = parsePrices(response.body());
+                for (List<Object> entry : response.prices()) {
+                    long timestamp = ((Number) entry.get(0)).longValue();
+                    Instant instant = Instant.ofEpochMilli(timestamp);
+                    double price = ((Number) entry.get(1)).doubleValue();
+                    prices.add(new PricePoint(instant, price));
+                }
 
                 // ✅ Actualizar caché
-                cachedPrices = parsed;
-                lastFetchTime = Instant.now();
+                cachedPrices = prices;
+                lastCacheUpdate = Instant.now();
 
-                System.out.println("✅ Datos CoinGecko actualizados correctamente");
-                return parsed;
+                return prices;
 
             } catch (Exception e) {
-                System.out.println("⚠️ Error CoinGecko (intento " + attempt + "): " + e.getMessage());
-                waitBackoff(attempt);
+                System.out.println("⚠️ Error CoinGecko (intento " + (i + 1) + "): " + e.getMessage());
+
+                // ✅ Detectar rate limit
+                if (e.getMessage() != null && e.getMessage().contains("429")) {
+                    lastRateLimitHit = Instant.now();
+                }
+
+                try {
+                    Thread.sleep(delays[i]);
+                } catch (InterruptedException ignored) {}
             }
         }
 
-        // ✅ 3. Si todos los intentos fallan → usar caché
+        // ✅ 4. Si todos los intentos fallan → devolver caché
         System.out.println("✅ Usando caché como fallback final");
-        return cachedPrices != null ? cachedPrices : List.of();
+        return cachedPrices;
     }
 
-    private void waitBackoff(int attempt) {
-        try {
-            int seconds = BACKOFF_SECONDS[Math.min(attempt - 1, BACKOFF_SECONDS.length - 1)];
-            Thread.sleep(seconds * 1000L);
-        } catch (InterruptedException ignored) {}
-    }
-
-    private List<PricePoint> parsePrices(String json) {
-        List<PricePoint> list = new ArrayList<>();
-
-        try {
-            String pricesArray = json.split("\"prices\":")[1];
-            pricesArray = pricesArray.substring(1, pricesArray.indexOf("]"));
-
-            String[] entries = pricesArray.split("],");
-
-            for (String entry : entries) {
-                entry = entry.replace("[", "").replace("]", "");
-                String[] parts = entry.split(",");
-
-                long timestamp = Long.parseLong(parts[0].trim());
-                double price = Double.parseDouble(parts[1].trim());
-
-                list.add(new PricePoint(Instant.ofEpochMilli(timestamp), price));
-            }
-
-        } catch (Exception e) {
-            System.out.println("⚠️ Error parseando CoinGecko: " + e.getMessage());
-        }
-
-        return list;
-    }
+    // ✅ Clase interna para mapear respuesta JSON
+    public record CoinGeckoResponse(List<List<Object>> prices) {}
 }
