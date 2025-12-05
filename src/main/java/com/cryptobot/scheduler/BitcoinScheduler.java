@@ -28,8 +28,8 @@ public class BitcoinScheduler {
         return (long) (Math.random() * 10000); // 0–10 segundos
     }
 
-    // ✅ Cron exacto: 00 y 30 de cada hora
-    @Scheduled(cron = "0 0/30 * * * *")
+    // ✅ Cron exacto: 00 y 15 de cada hora
+    @Scheduled(cron = "0 0/15 * * * *")
     public void run() {
         try {
             // ✅ Saltar la primera ejecución tras el arranque

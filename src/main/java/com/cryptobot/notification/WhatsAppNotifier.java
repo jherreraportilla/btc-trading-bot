@@ -96,6 +96,14 @@ public class WhatsAppNotifier {
                 lastRateLimit = Instant.now();
                 return;
             }
+            
+			// ✅ Error 502 → retry + cooldown corto
+			if (status == 502) {
+				System.err.println("⚠️ WhatsApp API 502 (Bad Gateway). Reintentando en 3 segundos...");
+				Thread.sleep(3000); // pequeño backoff
+				lastRateLimit = Instant.now(); // activar cooldown
+				return;
+			}
 
             // ✅ Otros errores → log
             System.err.println("WhatsApp API error: " + status);
