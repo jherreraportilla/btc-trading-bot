@@ -40,9 +40,37 @@ public class SignalEvaluatorService {
         }
     }
 
+    // ✅ Calcular solo el RSI actual
+    public double calculateRSI(List<PricePoint> prices) {
+
+        if (prices == null || prices.size() < 15) return -1;
+
+        prices.sort((a, b) -> a.dateTime().compareTo(b.dateTime()));
+
+        BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
+
+        for (PricePoint p : prices) {
+            series.addBar(
+                    Duration.ofHours(1),
+                    p.dateTime(),
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    0
+            );
+        }
+
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        RSIIndicator rsiIndicator = new RSIIndicator(closePrice, 14);
+
+        double rsi = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
+        return Double.isNaN(rsi) ? -1 : rsi;
+    }
+
+    // ✅ Señal clásica BUY/SELL/HOLD
     public Signal evaluateRsiSignal(List<PricePoint> prices) {
 
-        // ✅ Validación inicial
         if (prices == null || prices.size() < 15) {
             double lastPrice = (prices != null && !prices.isEmpty())
                     ? prices.get(prices.size() - 1).price()
@@ -51,12 +79,10 @@ public class SignalEvaluatorService {
             return new Signal(Signal.Type.HOLD, -1, lastPrice);
         }
 
-        // ✅ Ordenar por fecha (muy importante)
         prices.sort((a, b) -> a.dateTime().compareTo(b.dateTime()));
 
         BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
 
-        // ✅ Construcción segura de la serie
         for (PricePoint p : prices) {
             series.addBar(
                     Duration.ofHours(1),
@@ -75,21 +101,12 @@ public class SignalEvaluatorService {
         double rsi_value = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
         double currentPrice = prices.get(prices.size() - 1).price();
 
-        // ✅ Manejo de NaN
         if (Double.isNaN(rsi_value)) {
             return new Signal(Signal.Type.HOLD, -1, currentPrice);
         }
 
-        System.out.println("RSI(14): " + String.format("%.2f", rsi_value) +
-                " | Precio: $" + String.format("%,.0f", currentPrice));
-
-        // ✅ Señales
-        if (rsi_value < 30) {
-            return new Signal(Signal.Type.BUY, rsi_value, currentPrice);
-        }
-        if (rsi_value > 70) {
-            return new Signal(Signal.Type.SELL, rsi_value, currentPrice);
-        }
+        if (rsi_value < 30) return new Signal(Signal.Type.BUY, rsi_value, currentPrice);
+        if (rsi_value > 70) return new Signal(Signal.Type.SELL, rsi_value, currentPrice);
 
         return new Signal(Signal.Type.HOLD, rsi_value, currentPrice);
     }

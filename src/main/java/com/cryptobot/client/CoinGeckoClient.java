@@ -28,13 +28,12 @@ public class CoinGeckoClient {
 
     public List<PricePoint> getLastHourlyPrices(int hours) throws Exception {
 
-        // ✅ Si tenemos datos recientes (< 55 min), devolvemos caché
+        // ✅ Caché ajustada para scheduler de 30 min
         if (cachedPrices != null && lastFetchTime != null &&
-                Duration.between(lastFetchTime, Instant.now()).toMinutes() < 55) {
+                Duration.between(lastFetchTime, Instant.now()).toMinutes() < 25) {
             return cachedPrices;
         }
 
-        // ✅ CoinGecko exige mínimo 2 días para datos horarios
         double days = Math.max(2, hours / 24.0);
 
         String url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart" +
@@ -48,31 +47,21 @@ public class CoinGeckoClient {
         HttpResponse<String> response =
                 httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        // ✅ Manejo de rate limit (429)
         if (response.statusCode() == 429) {
             System.out.println("Rate limit alcanzado. Usando caché si existe.");
-
-            if (cachedPrices != null) {
-                return cachedPrices;
-            } else {
-                System.out.println("CoinGecko rate limit sin caché → devolviendo lista vacía.");
-                return List.of(); // fallback seguro
-            }
+            return cachedPrices != null ? cachedPrices : List.of();
         }
 
-        // ✅ Manejo de error 401 (interval prohibido)
         if (response.statusCode() == 401) {
-            System.out.println("CoinGecko 401 sin caché → devolviendo lista vacía.");
+            System.out.println("CoinGecko 401 → usando caché.");
             return cachedPrices != null ? cachedPrices : List.of();
         }
 
-        // ✅ Otros errores
         if (response.statusCode() != 200) {
-            System.out.println("CoinGecko error " + response.statusCode() + " → devolviendo lista vacía.");
+            System.out.println("Error CoinGecko " + response.statusCode());
             return cachedPrices != null ? cachedPrices : List.of();
         }
 
-        // ✅ Parseo de JSON
         JsonNode prices = objectMapper.readTree(response.body()).get("prices");
         List<PricePoint> result = new ArrayList<>();
 
@@ -86,7 +75,6 @@ public class CoinGeckoClient {
             result.add(new PricePoint(dateTime, price));
         }
 
-        // ✅ Guardar en caché
         cachedPrices = result;
         lastFetchTime = Instant.now();
 

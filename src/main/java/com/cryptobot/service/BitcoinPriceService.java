@@ -13,61 +13,136 @@ public class BitcoinPriceService {
 
     private final CoinGeckoClient coinGeckoClient;
     private final SignalEvaluatorService signalEvaluator;
-    private final WhatsAppNotifier whatsAppNotifier;
+    private final WhatsAppNotifier notifier;
+
+    // ✅ Para evitar duplicados
+    private Double lastPrice = null;
+    private Double lastRsi = null;
+    private SignalEvaluatorService.Signal.Type lastSignalType =
+            SignalEvaluatorService.Signal.Type.HOLD;
+
+    // ✅ Configurable: % de cambio para alertar
+    private static final double PRICE_CHANGE_THRESHOLD = 1.0;
 
     @Autowired
     public BitcoinPriceService(CoinGeckoClient coinGeckoClient,
                                SignalEvaluatorService signalEvaluator,
-                               WhatsAppNotifier whatsAppNotifier) {
+                               WhatsAppNotifier notifier) {
         this.coinGeckoClient = coinGeckoClient;
         this.signalEvaluator = signalEvaluator;
-        this.whatsAppNotifier = whatsAppNotifier;
+        this.notifier = notifier;
     }
 
-    public SignalEvaluatorService.Signal checkAndGetSignal() throws Exception {
+    public void process() throws Exception {
 
-        // ✅ 1. Obtener precios
         List<PricePoint> prices = coinGeckoClient.getLastHourlyPrices(48);
 
-        // ✅ 2. Validar que haya datos
         if (prices == null || prices.isEmpty()) {
-            System.out.println("No hay datos de precios disponibles. Usando HOLD.");
-            return null;
+            System.out.println("No hay datos de precios disponibles.");
+            return;
         }
 
-        // ✅ 3. Evaluar señal RSI
+        double price = prices.get(prices.size() - 1).price();
+        double rsi = signalEvaluator.calculateRSI(prices);
+
+        // ✅ 1. Actualización automática
+        sendPeriodicUpdate(price, rsi);
+
+        // ✅ 2. Alerta por cambio de precio
+        checkPriceChange(price);
+
+        // ✅ 3. Alerta por cruce RSI
+        checkRSICross(rsi, price);
+
+        // ✅ 4. Señales RSI clásicas
+        checkClassicSignal(prices, price, rsi);
+
+        lastPrice = price;
+        lastRsi = rsi;
+    }
+
+    private void sendPeriodicUpdate(double price, double rsi) {
+        String msg = """
+                📊 *Actualización BTC (30 min)*
+
+                *Precio:* $%,.0f USD
+                *RSI(14):* %.2f
+
+                https://www.tradingview.com/x/BTCUSD_1h.png
+                """.formatted(price, rsi);
+
+        notifier.sendMessage(msg);
+    }
+
+    private void checkPriceChange(double price) {
+        if (lastPrice == null) return;
+
+        double change = ((price - lastPrice) / lastPrice) * 100;
+
+        if (Math.abs(change) >= PRICE_CHANGE_THRESHOLD) {
+            String msg = """
+                    🚨 *Movimiento fuerte en BTC*
+
+                    Cambio: %.2f%%
+                    Precio actual: $%,.0f USD
+
+                    https://www.tradingview.com/x/BTCUSD_1h.png
+                    """.formatted(change, price);
+
+            notifier.sendMessage(msg);
+        }
+    }
+
+    private void checkRSICross(double rsi, double price) {
+        if (lastRsi == null) return;
+
+        if (lastRsi > 70 && rsi <= 70) {
+            notifier.sendMessage("""
+                    🔻 *RSI cruza hacia abajo 70 (sobrecompra)*
+
+                    Precio: $%,.0f
+                    RSI: %.2f
+                    """.formatted(price, rsi));
+        }
+
+        if (lastRsi < 30 && rsi >= 30) {
+            notifier.sendMessage("""
+                    🔼 *RSI cruza hacia arriba 30 (sobreventa)*
+
+                    Precio: $%,.0f
+                    RSI: %.2f
+                    """.formatted(price, rsi));
+        }
+    }
+
+    private void checkClassicSignal(List<PricePoint> prices, double price, double rsi) {
+
         SignalEvaluatorService.Signal signal = signalEvaluator.evaluateRsiSignal(prices);
 
-        // ✅ 4. Si no hay señal activa → HOLD
         if (signal == null || !signal.isActive()) {
-            System.out.println("Sin señal fuerte → HOLD (RSI: " +
-                    (signal != null ? String.format("%.2f", signal.getRsi()) : "N/A") + ")");
-            return signal;
+            lastSignalType = SignalEvaluatorService.Signal.Type.HOLD;
+            return;
         }
 
-        // ✅ 5. Obtener precio actual de forma segura
-        double precioActual = prices.get(prices.size() - 1).price();
+        if (signal.getType() == lastSignalType) return;
 
-        // ✅ 6. Construir mensaje
+        lastSignalType = signal.getType();
+
         String mensaje = """
                 *SEÑAL BTC AUTOMÁTICA - RSI 14*
-                
+
                 %s
-                
+
                 *Precio actual:* $%,.0f USD
                 *RSI(14):* %.2f
-                
+
                 https://www.tradingview.com/x/BTCUSD_1h.png
                 """.formatted(
                 signal.getType().getMessage(),
-                precioActual,
-                signal.getRsi()
+                price,
+                rsi
         );
 
-        // ✅ 7. Enviar notificación
-        whatsAppNotifier.sendMessage(mensaje);
-        System.out.println("SEÑAL ENVIADA: " + signal.getType().getMessage());
-
-        return signal;
+        notifier.sendMessage(mensaje);
     }
 }
