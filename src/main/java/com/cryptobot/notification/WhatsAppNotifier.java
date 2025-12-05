@@ -7,6 +7,10 @@ import java.net.http.HttpResponse;
 
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+import java.util.LinkedList;
+import java.util.Queue;
+
 @Component
 public class WhatsAppNotifier {
 
@@ -17,43 +21,85 @@ public class WhatsAppNotifier {
     // ✅ JID REAL DEL GRUPO BOT-TRADIN
     private static final String GROUP_ID = "120363404627482611@g.us";
 
-    // ✅ HttpClient reutilizable
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
+    // ✅ Cooldown si WhatsApp devuelve 429
+    private Instant lastRateLimit = null;
+
+    // ✅ Cola de mensajes pendientes
+    private final Queue<String> messageQueue = new LinkedList<>();
+
+    // ✅ Tiempo de cooldown tras 429 (10 segundos)
+    private static final int COOLDOWN_SECONDS = 10;
+
     public void sendMessage(String mensaje) {
+        // ✅ Guardar mensaje en cola
+        messageQueue.add(mensaje);
+
+        // ✅ Intentar enviar ahora
+        processQueue();
+    }
+
+    private void processQueue() {
         try {
-            String url = URL_BASE + "/message/sendText/" + INSTANCE;
+            // ✅ Si estamos en cooldown → no enviar
+            if (lastRateLimit != null &&
+                Instant.now().minusSeconds(COOLDOWN_SECONDS).isBefore(lastRateLimit)) {
 
-            // ✅ Escapar correctamente el texto
+                System.out.println("⏳ WhatsApp cooldown activo, mensajes en cola: " + messageQueue.size());
+                return;
+            }
+
+            // ✅ Si no hay mensajes → salir
+            if (messageQueue.isEmpty()) return;
+
+            // ✅ Tomar el siguiente mensaje
+            String mensaje = messageQueue.peek();
+
+            // ✅ Escapar caracteres peligrosos
             String safeText = mensaje
-                    .replace("\\", "\\\\")   // escapar backslashes
-                    .replace("\"", "\\\"")   // escapar comillas
-                    .replace("\n", "\\n")    // escapar saltos de línea
-                    .replace("\r", "");      // eliminar CR si existe
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "");
 
-            // ✅ JSON sin text blocks
             String json = "{"
                     + "\"number\":\"" + GROUP_ID + "\","
                     + "\"text\":\"" + safeText + "\","
                     + "\"options\":{\"delay\":1200}"
                     + "}";
 
+            String url = URL_BASE + "/message/sendText/" + INSTANCE;
+
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Content-Type", "application/json")
-                .header("apikey", API_KEY)
-                .POST(HttpRequest.BodyPublishers.ofString(json))
-                .build();
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("apikey", API_KEY)
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
 
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-            if (response.statusCode() != 200) {
-                System.err.println("WhatsApp API error: " + response.statusCode());
-                System.err.println("Respuesta: " + response.body());
-            } else {
+            int status = response.statusCode();
+
+            // ✅ Éxito (200 o 201)
+            if (status == 200 || status == 201) {
                 System.out.println("✅ Mensaje enviado al grupo BOT-TRADIN");
+                messageQueue.poll(); // ✅ eliminar mensaje enviado
+                return;
             }
+
+            // ✅ Rate limit → activar cooldown
+            if (status == 429) {
+                System.err.println("⚠️ WhatsApp rate limit (429). Activando cooldown.");
+                lastRateLimit = Instant.now();
+                return;
+            }
+
+            // ✅ Otros errores → log
+            System.err.println("WhatsApp API error: " + status);
+            System.err.println("Respuesta: " + response.body());
 
         } catch (Exception e) {
             System.err.println("❌ Fallo WhatsApp: " + e.getMessage());

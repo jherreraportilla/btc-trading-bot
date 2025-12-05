@@ -15,6 +15,9 @@ public class BitcoinScheduler {
     // ✅ Cooldown si CoinGecko devuelve 429
     private Instant lastFailure = null;
 
+    // ✅ Evitar ejecutar justo al arrancar
+    private boolean firstRun = true;
+
     @Autowired
     public BitcoinScheduler(BitcoinPriceService priceService) {
         this.priceService = priceService;
@@ -25,11 +28,18 @@ public class BitcoinScheduler {
         return (long) (Math.random() * 10000); // 0–10 segundos
     }
 
-    // ✅ Cada 30 minutos, con delay inicial de 30s (compatible con Spring 7)
-    @Scheduled(fixedRate = 1800000, initialDelay = 30000)
+    // ✅ Cron exacto: 00 y 30 de cada hora
+    @Scheduled(cron = "0 0/30 * * * *")
     public void run() {
         try {
-            // ✅ Evitar que miles de bots llamen a CoinGecko al mismo tiempo
+            // ✅ Saltar la primera ejecución tras el arranque
+            if (firstRun) {
+                firstRun = false;
+                System.out.println("⏳ Saltando primera ejecución tras el arranque");
+                return;
+            }
+
+            // ✅ Evitar sincronización global
             Thread.sleep(randomJitter());
 
             // ✅ Cooldown si CoinGecko falló recientemente
