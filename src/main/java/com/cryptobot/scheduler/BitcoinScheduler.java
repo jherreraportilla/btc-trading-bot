@@ -2,7 +2,7 @@ package com.cryptobot.scheduler;
 
 import com.cryptobot.notification.WhatsAppNotifier;
 import com.cryptobot.service.BitcoinPriceService;
-import com.cryptobot.service.SignalEvaluatorService.Signal;
+import com.cryptobot.service.SignalEvaluatorService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,22 +19,44 @@ public class BitcoinScheduler {
         this.whatsAppNotifier = whatsAppNotifier;
     }
 
-    @Scheduled(fixedRate = 300000) // cada 5 minutos
+    // Cada 5 minutos (300000 ms) → puedes cambiar a 3600000 para cada hora
+    @Scheduled(fixedRate = 300000)
     public void run() {
         try {
-            Signal signal = priceService.checkAndGetSignal();
+            SignalEvaluatorService.Signal signal = priceService.checkAndGetSignal();
 
-            String mensaje = switch (signal) {
-                case BUY -> "COMPRA BTC YA!!\nRSI muy bajo, posible rebote fuerte";
-                case SELL -> "VENDE BTC!!\nRSI muy alto, posible corrección";
-                case HOLD -> "Nada que hacer... HOLD";
-            };
+            // Solo enviamos si hay señal activa (no HOLD)
+            if (signal != null && signal.isActive()) {
+                double precio = signal.getPrice();
+                double rsi = signal.getRsi();
 
-            whatsAppNotifier.sendMessage(mensaje);
-            System.out.println(mensaje);
+                String mensaje = """
+                    *SEÑAL BTC AUTOMÁTICA - RSI 14*
+                    
+                    %s
+                    
+                    *Precio actual:* $%,.0f USD
+                    *RSI(14):* %.2f
+                    
+                    https://www.tradingview.com/x/BTCUSD_1h.png
+                    """.formatted(
+                    signal.getType().getMessage(),
+                    precio,
+                    rsi
+                );
+
+                whatsAppNotifier.sendMessage(mensaje);
+                System.out.println("SEÑAL ENVIADA: " + signal.getType().getMessage());
+
+            } else {
+                System.out.println("Sin señal fuerte → HOLD (RSI: " + 
+                    (signal != null ? String.format("%.2f", signal.getRsi()) : "N/A") + ")");
+            }
 
         } catch (Exception e) {
-        	whatsAppNotifier.sendMessage("Error en el bot: " + e.getMessage());
+            String errorMsg = "ERROR CRÍTICO EN EL BOT: " + e.getMessage();
+            whatsAppNotifier.sendMessage(errorMsg);
+            e.printStackTrace();
         }
     }
 }
