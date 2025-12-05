@@ -25,13 +25,31 @@ public class BitcoinPriceService {
     }
 
     public SignalEvaluatorService.Signal checkAndGetSignal() throws Exception {
+
+        // ✅ 1. Obtener precios
         List<PricePoint> prices = coinGeckoClient.getLastHourlyPrices(48);
+
+        // ✅ 2. Validar que haya datos
+        if (prices == null || prices.isEmpty()) {
+            System.out.println("No hay datos de precios disponibles. Usando HOLD.");
+            return null;
+        }
+
+        // ✅ 3. Evaluar señal RSI
         SignalEvaluatorService.Signal signal = signalEvaluator.evaluateRsiSignal(prices);
 
-        if (signal != null && signal.isActive()) {
-            double precioActual = prices.get(prices.size() - 1).price();
+        // ✅ 4. Si no hay señal activa → HOLD
+        if (signal == null || !signal.isActive()) {
+            System.out.println("Sin señal fuerte → HOLD (RSI: " +
+                    (signal != null ? String.format("%.2f", signal.getRsi()) : "N/A") + ")");
+            return signal;
+        }
 
-            String mensaje = """
+        // ✅ 5. Obtener precio actual de forma segura
+        double precioActual = prices.get(prices.size() - 1).price();
+
+        // ✅ 6. Construir mensaje
+        String mensaje = """
                 *SEÑAL BTC AUTOMÁTICA - RSI 14*
                 
                 %s
@@ -44,10 +62,11 @@ public class BitcoinPriceService {
                 signal.getType().getMessage(),
                 precioActual,
                 signal.getRsi()
-            );
+        );
 
-            whatsAppNotifier.sendMessage(mensaje);
-        }
+        // ✅ 7. Enviar notificación
+        whatsAppNotifier.sendMessage(mensaje);
+        System.out.println("SEÑAL ENVIADA: " + signal.getType().getMessage());
 
         return signal;
     }

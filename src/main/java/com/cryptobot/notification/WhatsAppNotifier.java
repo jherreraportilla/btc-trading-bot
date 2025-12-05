@@ -4,9 +4,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+
 import org.springframework.stereotype.Component;
 
-@Component   // ← AÑADE ESTO
+@Component
 public class WhatsAppNotifier {
 
     private static final String URL_BASE = "https://btc-whatsapp.onrender.com";
@@ -14,10 +15,13 @@ public class WhatsAppNotifier {
     private static final String INSTANCE  = "default";
     private static final String TU_NUMERO = "34671072929";
 
-    // QUITA EL STATIC
+    // ✅ HttpClient reutilizable
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
     public void sendMessage(String mensaje) {
         try {
             String url = URL_BASE + "/message/sendText/" + INSTANCE;
+
             String json = """
                 {
                     "number": "%s",
@@ -33,11 +37,19 @@ public class WhatsAppNotifier {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build();
 
-            HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
-            System.out.println("Alerta enviada a WhatsApp");
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            // ✅ Validación de respuesta
+            if (response.statusCode() != 200) {
+                System.err.println("WhatsApp API error: " + response.statusCode());
+                System.err.println("Respuesta: " + response.body());
+            } else {
+                System.out.println("✅ Alerta enviada a WhatsApp");
+            }
 
         } catch (Exception e) {
-            System.err.println("Fallo WhatsApp: " + e.getMessage());
+            System.err.println("❌ Fallo WhatsApp: " + e.getMessage());
         }
     }
 }

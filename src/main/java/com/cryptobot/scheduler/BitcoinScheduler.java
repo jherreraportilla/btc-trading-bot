@@ -13,24 +13,38 @@ public class BitcoinScheduler {
     private final BitcoinPriceService priceService;
     private final WhatsAppNotifier whatsAppNotifier;
 
+    // ✅ Para evitar enviar señales duplicadas
+    private SignalEvaluatorService.Signal.Type lastSignalType = SignalEvaluatorService.Signal.Type.HOLD;
+
     @Autowired
     public BitcoinScheduler(BitcoinPriceService priceService, WhatsAppNotifier whatsAppNotifier) {
         this.priceService = priceService;
         this.whatsAppNotifier = whatsAppNotifier;
     }
 
-    // Cada 5 minutos (300000 ms) → puedes cambiar a 3600000 para cada hora
-    @Scheduled(fixedRate = 300000)
+    @Scheduled(fixedRate = 3600000) // cada 1 hora
     public void run() {
         try {
             SignalEvaluatorService.Signal signal = priceService.checkAndGetSignal();
 
-            // Solo enviamos si hay señal activa (no HOLD)
-            if (signal != null && signal.isActive()) {
-                double precio = signal.getPrice();
-                double rsi = signal.getRsi();
+            // ✅ Si no hay señal o es HOLD → log y salir
+            if (signal == null || !signal.isActive()) {
+                System.out.println("Sin señal fuerte → HOLD (RSI: " +
+                        (signal != null ? String.format("%.2f", signal.getRsi()) : "N/A") + ")");
+                lastSignalType = SignalEvaluatorService.Signal.Type.HOLD;
+                return;
+            }
 
-                String mensaje = """
+            // ✅ Evitar enviar la misma señal repetida
+            if (signal.getType() == lastSignalType) {
+                System.out.println("Señal repetida (" + signal.getType() + ") → no se envía.");
+                return;
+            }
+
+            lastSignalType = signal.getType();
+
+            // ✅ Construir mensaje
+            String mensaje = """
                     *SEÑAL BTC AUTOMÁTICA - RSI 14*
                     
                     %s
@@ -41,21 +55,27 @@ public class BitcoinScheduler {
                     https://www.tradingview.com/x/BTCUSD_1h.png
                     """.formatted(
                     signal.getType().getMessage(),
-                    precio,
-                    rsi
-                );
+                    signal.getPrice(),
+                    signal.getRsi()
+            );
 
-                whatsAppNotifier.sendMessage(mensaje);
-                System.out.println("SEÑAL ENVIADA: " + signal.getType().getMessage());
-
-            } else {
-                System.out.println("Sin señal fuerte → HOLD (RSI: " + 
-                    (signal != null ? String.format("%.2f", signal.getRsi()) : "N/A") + ")");
-            }
+            // ✅ Enviar notificación
+            whatsAppNotifier.sendMessage(mensaje);
+            System.out.println("✅ SEÑAL ENVIADA: " + signal.getType().getMessage());
 
         } catch (Exception e) {
-            String errorMsg = "ERROR CRÍTICO EN EL BOT: " + e.getMessage();
-            whatsAppNotifier.sendMessage(errorMsg);
+
+            // ✅ Mensaje de error más claro
+            String errorMsg = "⚠️ ERROR en el bot BTC: " + e.getMessage();
+            System.err.println(errorMsg);
+
+            // ✅ Intento de enviar alerta por WhatsApp
+            try {
+                whatsAppNotifier.sendMessage(errorMsg);
+            } catch (Exception ignored) {
+                System.err.println("No se pudo enviar el error por WhatsApp.");
+            }
+
             e.printStackTrace();
         }
     }

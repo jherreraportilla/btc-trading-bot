@@ -13,7 +13,6 @@ import java.util.List;
 @Service
 public class SignalEvaluatorService {
 
-    // Clase con toda la info para la alerta
     public static class Signal {
         private final Type type;
         private final double rsi;
@@ -42,39 +41,56 @@ public class SignalEvaluatorService {
     }
 
     public Signal evaluateRsiSignal(List<PricePoint> prices) {
+
+        // ✅ Validación inicial
         if (prices == null || prices.size() < 15) {
-            double lastPrice = prices != null && !prices.isEmpty() ? prices.get(prices.size()-1).price() : 0;
-            return new Signal(Signal.Type.HOLD, 0, lastPrice);
+            double lastPrice = (prices != null && !prices.isEmpty())
+                    ? prices.get(prices.size() - 1).price()
+                    : 0;
+
+            return new Signal(Signal.Type.HOLD, -1, lastPrice);
         }
+
+        // ✅ Ordenar por fecha (muy importante)
+        prices.sort((a, b) -> a.dateTime().compareTo(b.dateTime()));
 
         BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
 
-        // AQUÍ ESTÁ LA CLAVE: timePeriod, endTime, open, high, low, close, volume
+        // ✅ Construcción segura de la serie
         for (PricePoint p : prices) {
             series.addBar(
-                Duration.ofHours(1),  // timePeriod: asumo barras de 1 hora (ajusta si es diferente)
-                p.dateTime(),         // endTime: tu ZonedDateTime
-                p.price(),            // open
-                p.price(),            // high (usa el mismo por simplicidad, o ajusta si tienes OHLC real)
-                p.price(),            // low
-                p.price(),            // close
-                0                     // volume (ajusta si tienes)
+                    Duration.ofHours(1),
+                    p.dateTime(),
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    0
             );
         }
 
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
         RSIIndicator rsiIndicator = new RSIIndicator(closePrice, 14);
+
         double rsi_value = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
-        double currentPrice = prices.get(prices.size()-1).price();
+        double currentPrice = prices.get(prices.size() - 1).price();
 
-        System.out.println("RSI(14): " + String.format("%.2f", rsi_value) + " | Precio: $" + String.format("%,.0f", currentPrice));
+        // ✅ Manejo de NaN
+        if (Double.isNaN(rsi_value)) {
+            return new Signal(Signal.Type.HOLD, -1, currentPrice);
+        }
 
+        System.out.println("RSI(14): " + String.format("%.2f", rsi_value) +
+                " | Precio: $" + String.format("%,.0f", currentPrice));
+
+        // ✅ Señales
         if (rsi_value < 30) {
             return new Signal(Signal.Type.BUY, rsi_value, currentPrice);
         }
         if (rsi_value > 70) {
             return new Signal(Signal.Type.SELL, rsi_value, currentPrice);
         }
+
         return new Signal(Signal.Type.HOLD, rsi_value, currentPrice);
     }
 }
