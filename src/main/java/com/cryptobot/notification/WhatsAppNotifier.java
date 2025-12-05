@@ -24,13 +24,19 @@ public class WhatsAppNotifier {
         try {
             String url = URL_BASE + "/message/sendText/" + INSTANCE;
 
-            String json = """
-                {
-                    "number": "%s",
-                    "text": "%s",
-                    "options": {"delay": 1200}
-                }
-                """.formatted(GROUP_ID, mensaje.replace("\"", "\\\""));
+            // ✅ Escapar correctamente el texto
+            String safeText = mensaje
+                    .replace("\\", "\\\\")   // escapar backslashes
+                    .replace("\"", "\\\"")   // escapar comillas
+                    .replace("\n", "\\n")    // escapar saltos de línea
+                    .replace("\r", "");      // eliminar CR si existe
+
+            // ✅ JSON sin text blocks
+            String json = "{"
+                    + "\"number\":\"" + GROUP_ID + "\","
+                    + "\"text\":\"" + safeText + "\","
+                    + "\"options\":{\"delay\":1200}"
+                    + "}";
 
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
