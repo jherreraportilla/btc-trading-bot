@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -17,15 +18,15 @@ public class BitcoinPriceService {
     private final SignalEvaluatorService signalEvaluator;
     private final WhatsAppNotifier notifier;
 
-    // ✅ Valores iniciales seguros (evitan nulls)
+    // ✅ Valores iniciales seguros
     private Double lastPrice = 0.0;
-    private Double lastRsi = 0.0;
+    private Double lastRsi = 50.0;
     private SignalEvaluatorService.Signal.Type lastSignalType =
             SignalEvaluatorService.Signal.Type.HOLD;
 
-    // ✅ Datos expuestos para /status (sin nulls)
+    // ✅ Datos expuestos para /status
     private Double lastKnownPrice = 0.0;
-    private Double lastKnownRsi = 0.0;
+    private Double lastKnownRsi = 50.0;
     private SignalEvaluatorService.Signal.Type lastKnownSignal =
             SignalEvaluatorService.Signal.Type.HOLD;
     private Instant lastExecutionTime = Instant.now();
@@ -36,6 +37,14 @@ public class BitcoinPriceService {
     public Instant getLastExecutionTime() { return lastExecutionTime; }
 
     private static final double PRICE_CHANGE_THRESHOLD = 1.0;
+
+    // ✅ RSI incremental
+    private Double avgGain = null;
+    private Double avgLoss = null;
+    private Double lastRsiValue = null;
+
+    // ✅ Últimos precios (solo 20 necesarios)
+    private final List<Double> recentPrices = new ArrayList<>();
 
     @Autowired
     public BitcoinPriceService(CoinGeckoClient coinGeckoClient,
@@ -56,7 +65,9 @@ public class BitcoinPriceService {
         }
 
         double price = prices.get(prices.size() - 1).price();
-        double rsi = safeDouble(signalEvaluator.calculateRSI(prices));
+
+        // ✅ RSI incremental
+        double rsi = updateRsiIncremental(price);
 
         // ✅ 1. Actualización automática
         sendPeriodicUpdate(price, rsi);
@@ -70,7 +81,7 @@ public class BitcoinPriceService {
         // ✅ 4. Señales RSI clásicas
         SignalEvaluatorService.Signal signal = checkClassicSignal(prices, price, rsi);
 
-        // ✅ Guardar últimos valores (sin nulls)
+        // ✅ Guardar últimos valores
         lastPrice = price;
         lastRsi = rsi;
 
@@ -85,9 +96,69 @@ public class BitcoinPriceService {
         return list != null ? list : Collections.emptyList();
     }
 
-    // ✅ Evita nulls en doubles
-    private double safeDouble(Double value) {
-        return value != null ? value : 0.0;
+    // ✅ RSI incremental
+    private double updateRsiIncremental(double newPrice) {
+
+        // Guardar precio
+        recentPrices.add(newPrice);
+        if (recentPrices.size() > 20) {
+            recentPrices.remove(0);
+        }
+
+        // ✅ Si no hay suficientes datos → RSI inicial
+        if (recentPrices.size() < 15) {
+            return calculateInitialRsi();
+        }
+
+        double prevPrice = recentPrices.get(recentPrices.size() - 2);
+        double change = newPrice - prevPrice;
+
+        double gain = Math.max(change, 0);
+        double loss = Math.max(-change, 0);
+
+        // ✅ Si aún no tenemos medias → RSI inicial
+        if (avgGain == null || avgLoss == null) {
+            return calculateInitialRsi();
+        }
+
+        // ✅ RSI incremental
+        avgGain = ((avgGain * 13) + gain) / 14;
+        avgLoss = ((avgLoss * 13) + loss) / 14;
+
+        if (avgLoss == 0) {
+            lastRsiValue = 100.0;
+            return lastRsiValue;
+        }
+
+        double rs = avgGain / avgLoss;
+        lastRsiValue = 100 - (100 / (1 + rs));
+
+        return lastRsiValue;
+    }
+
+    // ✅ RSI inicial (solo se ejecuta una vez)
+    private double calculateInitialRsi() {
+
+        if (recentPrices.size() < 15) return 50.0;
+
+        double gains = 0;
+        double losses = 0;
+
+        for (int i = 1; i < 15; i++) {
+            double diff = recentPrices.get(i) - recentPrices.get(i - 1);
+            if (diff > 0) gains += diff;
+            else losses -= diff;
+        }
+
+        avgGain = gains / 14;
+        avgLoss = losses / 14;
+
+        if (avgLoss == 0) return 100.0;
+
+        double rs = avgGain / avgLoss;
+        lastRsiValue = 100 - (100 / (1 + rs));
+
+        return lastRsiValue;
     }
 
     private void sendPeriodicUpdate(double price, double rsi) {
