@@ -1,6 +1,10 @@
 package com.cryptobot.controller;
 
 import com.cryptobot.notification.WhatsAppNotifier;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,9 +19,22 @@ public class NotifyController {
         this.notifier = notifier;
     }
 
-    @GetMapping
-    public String sendMessage(@RequestParam String msg) {
+    @GetMapping("/notify")
+    public Map<String, Object> sendMessage(@RequestParam(required = false) String msg) {
+
+        Map<String, Object> response = new LinkedHashMap<>();
+
+        if (msg == null || msg.isBlank()) {
+            response.put("status", "ERROR");
+            response.put("message", "El parámetro 'msg' es obligatorio");
+            return response;
+        }
+
         notifier.sendMessage(msg);
-        return "Mensaje enviado: " + msg;
+
+        response.put("status", "OK");
+        response.put("sent", msg);
+        return response;
     }
+
 }

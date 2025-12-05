@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -16,15 +17,15 @@ public class BitcoinPriceService {
     private final SignalEvaluatorService signalEvaluator;
     private final WhatsAppNotifier notifier;
 
-    // ✅ Para evitar duplicados
-    private Double lastPrice = null;
-    private Double lastRsi = null;
+    // ✅ Valores iniciales seguros (evitan nulls)
+    private Double lastPrice = 0.0;
+    private Double lastRsi = 0.0;
     private SignalEvaluatorService.Signal.Type lastSignalType =
             SignalEvaluatorService.Signal.Type.HOLD;
 
-    // ✅ Datos expuestos para /status
-    private Double lastKnownPrice = null;
-    private Double lastKnownRsi = null;
+    // ✅ Datos expuestos para /status (sin nulls)
+    private Double lastKnownPrice = 0.0;
+    private Double lastKnownRsi = 0.0;
     private SignalEvaluatorService.Signal.Type lastKnownSignal =
             SignalEvaluatorService.Signal.Type.HOLD;
     private Instant lastExecutionTime = Instant.now();
@@ -34,7 +35,6 @@ public class BitcoinPriceService {
     public SignalEvaluatorService.Signal.Type getLastSignalType() { return lastKnownSignal; }
     public Instant getLastExecutionTime() { return lastExecutionTime; }
 
-    // ✅ Configurable: % de cambio para alertar
     private static final double PRICE_CHANGE_THRESHOLD = 1.0;
 
     @Autowired
@@ -46,17 +46,17 @@ public class BitcoinPriceService {
         this.notifier = notifier;
     }
 
-    public void process() throws Exception {
+    public void process() {
 
-        List<PricePoint> prices = coinGeckoClient.getLastHourlyPrices(48);
+        List<PricePoint> prices = safeList(coinGeckoClient.getLastHourlyPrices(48));
 
-        if (prices == null || prices.isEmpty()) {
+        if (prices.isEmpty()) {
             System.out.println("⚠️ No hay datos de precios disponibles (CoinGecko falló y no hay caché).");
             return;
         }
 
         double price = prices.get(prices.size() - 1).price();
-        double rsi = signalEvaluator.calculateRSI(prices);
+        double rsi = safeDouble(signalEvaluator.calculateRSI(prices));
 
         // ✅ 1. Actualización automática
         sendPeriodicUpdate(price, rsi);
@@ -70,7 +70,7 @@ public class BitcoinPriceService {
         // ✅ 4. Señales RSI clásicas
         SignalEvaluatorService.Signal signal = checkClassicSignal(prices, price, rsi);
 
-        // ✅ Guardar últimos valores
+        // ✅ Guardar últimos valores (sin nulls)
         lastPrice = price;
         lastRsi = rsi;
 
@@ -78,6 +78,16 @@ public class BitcoinPriceService {
         lastKnownRsi = rsi;
         lastKnownSignal = signal != null ? signal.getType() : SignalEvaluatorService.Signal.Type.HOLD;
         lastExecutionTime = Instant.now();
+    }
+
+    // ✅ Evita nulls en listas
+    private List<PricePoint> safeList(List<PricePoint> list) {
+        return list != null ? list : Collections.emptyList();
+    }
+
+    // ✅ Evita nulls en doubles
+    private double safeDouble(Double value) {
+        return value != null ? value : 0.0;
     }
 
     private void sendPeriodicUpdate(double price, double rsi) {
@@ -94,7 +104,7 @@ public class BitcoinPriceService {
     }
 
     private void checkPriceChange(double price) {
-        if (lastPrice == null) return;
+        if (lastPrice == null || lastPrice == 0.0) return;
 
         double change = ((price - lastPrice) / lastPrice) * 100;
 
@@ -113,7 +123,7 @@ public class BitcoinPriceService {
     }
 
     private void checkRSICross(double rsi, double price) {
-        if (lastRsi == null) return;
+        if (lastRsi == null || lastRsi == 0.0) return;
 
         if (lastRsi > 70 && rsi <= 70) {
             notifier.sendMessage("""
