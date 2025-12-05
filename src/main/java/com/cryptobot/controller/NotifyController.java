@@ -19,7 +19,7 @@ public class NotifyController {
         this.notifier = notifier;
     }
 
-    @GetMapping("/notify")
+    @GetMapping
     public Map<String, Object> sendMessage(@RequestParam(required = false) String msg) {
 
         Map<String, Object> response = new LinkedHashMap<>();
@@ -30,6 +30,25 @@ public class NotifyController {
             return response;
         }
 
+        notifier.sendMessage(msg);
+
+        response.put("status", "OK");
+        response.put("sent", msg);
+        return response;
+    }
+    
+    @PostMapping
+    public Map<String, Object> sendMessagePost(@RequestBody(required = false) Map<String, String> body) {
+
+        Map<String, Object> response = new LinkedHashMap<>();
+
+        if (body == null || !body.containsKey("msg") || body.get("msg").isBlank()) {
+            response.put("status", "ERROR");
+            response.put("message", "El campo 'msg' es obligatorio");
+            return response;
+        }
+
+        String msg = body.get("msg");
         notifier.sendMessage(msg);
 
         response.put("status", "OK");
