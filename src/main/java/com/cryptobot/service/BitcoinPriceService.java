@@ -162,14 +162,14 @@ public class BitcoinPriceService {
     }
 
     private void sendPeriodicUpdate(double price, double rsi) {
-        String msg = """
-                📊 *Actualización BTC (30 min)*
 
-                *Precio:* $%,.0f USD
-                *RSI(14):* %.2f
+        String msg =
+                "📊 *Actualización BTC (30 min)*\n\n" +
+                "*Precio:* $%,.0f USD\n" +
+                "*RSI(14):* %.2f\n\n" +
+                "https://www.tradingview.com/x/BTCUSD_1h.png";
 
-                https://www.tradingview.com/x/BTCUSD_1h.png
-                """.formatted(price, rsi);
+        msg = msg.formatted(price, rsi);
 
         notifier.sendMessage(msg);
     }
@@ -180,14 +180,14 @@ public class BitcoinPriceService {
         double change = ((price - lastPrice) / lastPrice) * 100;
 
         if (Math.abs(change) >= PRICE_CHANGE_THRESHOLD) {
-            String msg = """
-                    🚨 *Movimiento fuerte en BTC*
 
-                    Cambio: %.2f%%
-                    Precio actual: $%,.0f USD
+            String msg =
+                    "🚨 *Movimiento fuerte en BTC*\n\n" +
+                    "Cambio: %.2f%%\n" +
+                    "Precio actual: $%,.0f USD\n\n" +
+                    "https://www.tradingview.com/x/BTCUSD_1h.png";
 
-                    https://www.tradingview.com/x/BTCUSD_1h.png
-                    """.formatted(change, price);
+            msg = msg.formatted(change, price);
 
             notifier.sendMessage(msg);
         }
@@ -197,21 +197,21 @@ public class BitcoinPriceService {
         if (lastRsi == null || lastRsi == 0.0) return;
 
         if (lastRsi > 70 && rsi <= 70) {
-            notifier.sendMessage("""
-                    🔻 *RSI cruza hacia abajo 70 (sobrecompra)*
+            String msg =
+                    "🔻 *RSI cruza hacia abajo 70 (sobrecompra)*\n\n" +
+                    "Precio: $%,.0f\n" +
+                    "RSI: %.2f";
 
-                    Precio: $%,.0f
-                    RSI: %.2f
-                    """.formatted(price, rsi));
+            notifier.sendMessage(msg.formatted(price, rsi));
         }
 
         if (lastRsi < 30 && rsi >= 30) {
-            notifier.sendMessage("""
-                    🔼 *RSI cruza hacia arriba 30 (sobreventa)*
+            String msg =
+                    "🔼 *RSI cruza hacia arriba 30 (sobreventa)*\n\n" +
+                    "Precio: $%,.0f\n" +
+                    "RSI: %.2f";
 
-                    Precio: $%,.0f
-                    RSI: %.2f
-                    """.formatted(price, rsi));
+            notifier.sendMessage(msg.formatted(price, rsi));
         }
     }
 
@@ -228,22 +228,20 @@ public class BitcoinPriceService {
 
         lastSignalType = signal.getType();
 
-        String mensaje = """
-                *SEÑAL BTC AUTOMÁTICA - RSI 14*
+        String msg =
+                "*SEÑAL BTC AUTOMÁTICA - RSI 14*\n\n" +
+                "%s\n\n" +
+                "*Precio actual:* $%,.0f USD\n" +
+                "*RSI(14):* %.2f\n\n" +
+                "https://www.tradingview.com/x/BTCUSD_1h.png";
 
-                %s
-
-                *Precio actual:* $%,.0f USD
-                *RSI(14):* %.2f
-
-                https://www.tradingview.com/x/BTCUSD_1h.png
-                """.formatted(
+        msg = msg.formatted(
                 signal.getType().getMessage(),
                 price,
                 rsi
         );
 
-        notifier.sendMessage(mensaje);
+        notifier.sendMessage(msg);
 
         return signal;
     }
