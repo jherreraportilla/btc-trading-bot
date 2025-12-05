@@ -55,25 +55,21 @@ public class CoinGeckoClient {
             if (cachedPrices != null) {
                 return cachedPrices;
             } else {
-                throw new RuntimeException("CoinGecko rate limit y no hay caché disponible.");
+                System.out.println("CoinGecko rate limit sin caché → devolviendo lista vacía.");
+                return List.of(); // fallback seguro
             }
         }
 
-        // ✅ Manejo de error 401 (interval=hourly prohibido)
+        // ✅ Manejo de error 401 (interval prohibido)
         if (response.statusCode() == 401) {
-            System.out.println("CoinGecko 401: revisa parámetros. Usando caché si existe.");
-
-            if (cachedPrices != null) {
-                return cachedPrices;
-            } else {
-                throw new RuntimeException("CoinGecko 401 y no hay caché disponible.");
-            }
+            System.out.println("CoinGecko 401 sin caché → devolviendo lista vacía.");
+            return cachedPrices != null ? cachedPrices : List.of();
         }
 
         // ✅ Otros errores
         if (response.statusCode() != 200) {
-            throw new RuntimeException("CoinGecko error: " +
-                    response.statusCode() + " " + response.body());
+            System.out.println("CoinGecko error " + response.statusCode() + " → devolviendo lista vacía.");
+            return cachedPrices != null ? cachedPrices : List.of();
         }
 
         // ✅ Parseo de JSON
