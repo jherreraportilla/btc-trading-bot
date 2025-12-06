@@ -1,116 +1,146 @@
 package com.cryptobot.notification;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-
+import com.cryptobot.config.BotProperties;
+import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedList;
-import java.util.Queue;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class WhatsAppNotifier {
 
-    private static final String URL_BASE = "https://btc-whatsapp.onrender.com";
-    private static final String API_KEY   = "nsYJm0M$k1C0F5G#HRsj";
-    private static final String INSTANCE  = "default";
+    private final RestTemplate restTemplate;
+    private final BotProperties config;
 
-    // ✅ JID REAL DEL GRUPO BOT-TRADIN
-    private static final String GROUP_ID = "120363404627482611@g.us";
+    // ✅ Control de rate limiting
+    private Instant lastMessageSent = null;
+    private final AtomicInteger messagesThisHour = new AtomicInteger(0);
+    private Instant hourStartTime = Instant.now();
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-
-    // ✅ Cooldown si WhatsApp devuelve 429
-    private Instant lastRateLimit = null;
-
-    // ✅ Cola de mensajes pendientes
-    private final Queue<String> messageQueue = new LinkedList<>();
-
-    // ✅ Tiempo de cooldown tras 429 (10 segundos)
-    private static final int COOLDOWN_SECONDS = 10;
-
-    public void sendMessage(String mensaje) {
-        // ✅ Guardar mensaje en cola
-        messageQueue.add(mensaje);
-
-        // ✅ Intentar enviar ahora
-        processQueue();
+    public WhatsAppNotifier(BotProperties config) {
+        this.config = config;
+        
+        // ✅ Configurar RestTemplate con timeout desde properties
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        int timeoutMs = config.getWhatsapp().getHttp().getTimeoutMs();
+        factory.setConnectTimeout(timeoutMs);
+        factory.setReadTimeout(timeoutMs);
+        
+        this.restTemplate = new RestTemplate(factory);
     }
 
-    private void processQueue() {
+    public void sendMessage(String message) {
         try {
-            // ✅ Si estamos en cooldown → no enviar
-            if (lastRateLimit != null &&
-                Instant.now().minusSeconds(COOLDOWN_SECONDS).isBefore(lastRateLimit)) {
-
-                System.out.println("⏳ WhatsApp cooldown activo, mensajes en cola: " + messageQueue.size());
+            // ✅ Verificar rate limiting
+            if (!checkRateLimit()) {
+                System.out.println("⚠️ Rate limit alcanzado, mensaje no enviado");
                 return;
             }
 
-            // ✅ Si no hay mensajes → salir
-            if (messageQueue.isEmpty()) return;
-
-            // ✅ Tomar el siguiente mensaje
-            String mensaje = messageQueue.peek();
-
-            // ✅ Escapar caracteres peligrosos
-            String safeText = mensaje
-                    .replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
-                    .replace("\r", "");
-
-            String json = "{"
-                    + "\"number\":\"" + GROUP_ID + "\","
-                    + "\"text\":\"" + safeText + "\","
-                    + "\"options\":{\"delay\":1200}"
-                    + "}";
-
-            String url = URL_BASE + "/message/sendText/" + INSTANCE;
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Content-Type", "application/json")
-                    .header("apikey", API_KEY)
-                    .POST(HttpRequest.BodyPublishers.ofString(json))
-                    .build();
-
-            HttpResponse<String> response =
-                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            int status = response.statusCode();
-
-            // ✅ Éxito (200 o 201)
-            if (status == 200 || status == 201) {
-                System.out.println("✅ Mensaje enviado al grupo BOT-TRADIN");
-                messageQueue.poll(); // ✅ eliminar mensaje enviado
-                return;
+            // ✅ Cooldown entre mensajes
+            if (lastMessageSent != null) {
+                long cooldownMs = config.getWhatsapp().getRateLimit().getCooldownMs();
+                long timeSinceLastMs = Duration.between(lastMessageSent, Instant.now()).toMillis();
+                
+                if (timeSinceLastMs < cooldownMs) {
+                    long waitMs = cooldownMs - timeSinceLastMs;
+                    System.out.println("⏳ Cooldown activo, esperando " + (waitMs / 1000) + "s");
+                    Thread.sleep(waitMs);
+                }
             }
 
-            // ✅ Rate limit → activar cooldown
-            if (status == 429) {
-                System.err.println("⚠️ WhatsApp rate limit (429). Activando cooldown.");
-                lastRateLimit = Instant.now();
-                return;
-            }
+            // ✅ Intentar enviar con reintentos
+            boolean sent = sendWithRetry(message);
             
-			// ✅ Error 502 → retry + cooldown corto
-			if (status == 502) {
-				System.err.println("⚠️ WhatsApp API 502 (Bad Gateway). Reintentando en 3 segundos...");
-				Thread.sleep(3000); // pequeño backoff
-				lastRateLimit = Instant.now(); // activar cooldown
-				return;
-			}
-
-            // ✅ Otros errores → log
-            System.err.println("WhatsApp API error: " + status);
-            System.err.println("Respuesta: " + response.body());
+            if (sent) {
+                lastMessageSent = Instant.now();
+                messagesThisHour.incrementAndGet();
+                System.out.println("✅ Mensaje WhatsApp enviado correctamente");
+            }
 
         } catch (Exception e) {
-            System.err.println("❌ Fallo WhatsApp: " + e.getMessage());
+            System.err.println("❌ Error enviando mensaje WhatsApp: " + e.getMessage());
         }
+    }
+
+    private boolean checkRateLimit() {
+        // ✅ Resetear contador cada hora
+        Duration timeSinceHourStart = Duration.between(hourStartTime, Instant.now());
+        if (timeSinceHourStart.toHours() >= 1) {
+            messagesThisHour.set(0);
+            hourStartTime = Instant.now();
+        }
+
+        int maxPerHour = config.getWhatsapp().getRateLimit().getMaxPerHour();
+        return messagesThisHour.get() < maxPerHour;
+    }
+
+    private boolean sendWithRetry(String message) {
+        int maxAttempts = config.getWhatsapp().getRetry().getMaxAttempts();
+        int initialDelay = config.getWhatsapp().getRetry().getInitialDelayMs();
+        int maxDelay = config.getWhatsapp().getRetry().getMaxDelayMs();
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                // ✅ Construir URL desde config
+                String url = String.format("%s/%s/messages/chat",
+                        config.getWhatsapp().getApi().getUrl(),
+                        config.getWhatsapp().getInstance().getId());
+
+                // ✅ Preparar headers
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+
+                // ✅ Preparar body
+                Map<String, String> body = new HashMap<>();
+                body.put("token", config.getWhatsapp().getApi().getToken());
+                body.put("to", config.getWhatsapp().getRecipient().getPhone());
+                body.put("body", message);
+
+                HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
+
+                // ✅ Enviar request
+                ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+
+                if (response.getStatusCode().is2xxSuccessful()) {
+                    return true;
+                }
+
+                System.err.println("⚠️ WhatsApp API respuesta no exitosa: " + response.getStatusCode());
+
+            } catch (Exception e) {
+                System.err.println("⚠️ Intento " + (attempt + 1) + "/" + maxAttempts + " falló: " + e.getMessage());
+
+                // ✅ Detectar errores específicos
+                if (e.getMessage() != null) {
+                    if (e.getMessage().contains("429")) {
+                        System.err.println("⚠️ WhatsApp rate limit detectado");
+                    } else if (e.getMessage().contains("502") || e.getMessage().contains("Bad Gateway")) {
+                        System.err.println("⚠️ WhatsApp API 502 (Bad Gateway)");
+                    }
+                }
+
+                // ✅ Backoff exponencial
+                if (attempt < maxAttempts - 1) {
+                    try {
+                        long delay = Math.min(initialDelay * (long) Math.pow(2, attempt), maxDelay);
+                        System.out.println("⏳ Reintentando en " + (delay / 1000) + " segundos...");
+                        Thread.sleep(delay);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
+        }
+
+        System.err.println("❌ Todos los intentos de envío WhatsApp fallaron");
+        return false;
     }
 }

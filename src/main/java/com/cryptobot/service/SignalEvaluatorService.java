@@ -1,5 +1,6 @@
 package com.cryptobot.service;
 
+import com.cryptobot.config.BotProperties;
 import com.cryptobot.model.PricePoint;
 import org.springframework.stereotype.Service;
 import org.ta4j.core.BarSeries;
@@ -14,6 +15,12 @@ import java.util.List;
 
 @Service
 public class SignalEvaluatorService {
+
+    private final BotProperties config;
+
+    public SignalEvaluatorService(BotProperties config) {
+        this.config = config;
+    }
 
     public static class Signal {
         private final Type type;
@@ -32,9 +39,9 @@ public class SignalEvaluatorService {
         public boolean isActive() { return type != Type.HOLD; }
 
         public enum Type {
-            BUY("COMPRA FUERTE - RSI < 30"),
-            SELL("VENTA FUERTE - RSI > 70"),
-            HOLD("MANTENER - Sin señal");
+            BUY("🟢 COMPRA FUERTE - RSI < 30"),
+            SELL("🔴 VENTA FUERTE - RSI > 70"),
+            HOLD("⚪ MANTENER - Sin señal");
 
             private final String message;
             Type(String message) { this.message = message; }
@@ -42,69 +49,42 @@ public class SignalEvaluatorService {
         }
     }
 
-    // ✅ Calcular RSI actual
     public double calculateRSI(List<PricePoint> prices) {
-
-        if (prices == null || prices.size() < 15) return -1;
+        int minDataPoints = config.getBitcoin().getRsi().getMinDataPoints();
+        
+        if (prices == null || prices.size() < minDataPoints) {
+            return -1;
+        }
 
         prices.sort((a, b) -> a.dateTime().compareTo(b.dateTime()));
 
-        BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
-
-        for (PricePoint p : prices) {
-
-            ZonedDateTime zdt = p.dateTime().atZone(ZoneId.of("UTC"));
-
-            series.addBar(
-                    Duration.ofHours(1),
-                    zdt,
-                    p.price(),
-                    p.price(),
-                    p.price(),
-                    p.price(),
-                    0
-            );
-        }
-
+        BarSeries series = buildBarSeries(prices);
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
-        RSIIndicator rsiIndicator = new RSIIndicator(closePrice, 14);
+        
+        int rsiPeriod = config.getBitcoin().getRsi().getPeriod();
+        RSIIndicator rsiIndicator = new RSIIndicator(closePrice, rsiPeriod);
 
         double rsi = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
         return Double.isNaN(rsi) ? -1 : rsi;
     }
 
-    // ✅ Señal clásica BUY / SELL / HOLD
     public Signal evaluateRsiSignal(List<PricePoint> prices) {
-
-        if (prices == null || prices.size() < 15) {
+        int minDataPoints = config.getBitcoin().getRsi().getMinDataPoints();
+        
+        if (prices == null || prices.size() < minDataPoints) {
             double lastPrice = (prices != null && !prices.isEmpty())
                     ? prices.get(prices.size() - 1).price()
                     : 0;
-
             return new Signal(Signal.Type.HOLD, -1, lastPrice);
         }
 
         prices.sort((a, b) -> a.dateTime().compareTo(b.dateTime()));
 
-        BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
-
-        for (PricePoint p : prices) {
-
-            ZonedDateTime zdt = p.dateTime().atZone(ZoneId.of("UTC"));
-
-            series.addBar(
-                    Duration.ofHours(1),
-                    zdt,
-                    p.price(),
-                    p.price(),
-                    p.price(),
-                    p.price(),
-                    0
-            );
-        }
-
+        BarSeries series = buildBarSeries(prices);
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
-        RSIIndicator rsiIndicator = new RSIIndicator(closePrice, 14);
+        
+        int rsiPeriod = config.getBitcoin().getRsi().getPeriod();
+        RSIIndicator rsiIndicator = new RSIIndicator(closePrice, rsiPeriod);
 
         double rsiValue = rsiIndicator.getValue(series.getEndIndex()).doubleValue();
         double currentPrice = prices.get(prices.size() - 1).price();
@@ -113,9 +93,37 @@ public class SignalEvaluatorService {
             return new Signal(Signal.Type.HOLD, -1, currentPrice);
         }
 
-        if (rsiValue < 30) return new Signal(Signal.Type.BUY, rsiValue, currentPrice);
-        if (rsiValue > 70) return new Signal(Signal.Type.SELL, rsiValue, currentPrice);
+        // ✅ Usar niveles configurables
+        int oversoldLevel = config.getBitcoin().getRsi().getOversoldLevel();
+        int overboughtLevel = config.getBitcoin().getRsi().getOverboughtLevel();
+
+        if (rsiValue < oversoldLevel) {
+            return new Signal(Signal.Type.BUY, rsiValue, currentPrice);
+        }
+        
+        if (rsiValue > overboughtLevel) {
+            return new Signal(Signal.Type.SELL, rsiValue, currentPrice);
+        }
 
         return new Signal(Signal.Type.HOLD, rsiValue, currentPrice);
+    }
+
+    private BarSeries buildBarSeries(List<PricePoint> prices) {
+        BarSeries series = new BaseBarSeriesBuilder().withName("BTC-USD").build();
+
+        for (PricePoint p : prices) {
+            ZonedDateTime zdt = p.dateTime().atZone(ZoneId.of("UTC"));
+            series.addBar(
+                    Duration.ofHours(1),
+                    zdt,
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    p.price(),
+                    0
+            );
+        }
+
+        return series;
     }
 }

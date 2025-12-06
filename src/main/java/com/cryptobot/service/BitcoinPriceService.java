@@ -1,9 +1,9 @@
 package com.cryptobot.service;
 
 import com.cryptobot.client.CoinGeckoClient;
+import com.cryptobot.config.BotProperties;
 import com.cryptobot.model.PricePoint;
 import com.cryptobot.notification.WhatsAppNotifier;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -17,6 +17,7 @@ public class BitcoinPriceService {
     private final CoinGeckoClient coinGeckoClient;
     private final SignalEvaluatorService signalEvaluator;
     private final WhatsAppNotifier notifier;
+    private final BotProperties config;
 
     // ✅ Valores iniciales seguros
     private Double lastPrice = 0.0;
@@ -31,36 +32,35 @@ public class BitcoinPriceService {
             SignalEvaluatorService.Signal.Type.HOLD;
     private Instant lastExecutionTime = Instant.now();
 
-    public Double getLastKnownPrice() { return lastKnownPrice; }
-    public Double getLastKnownRsi() { return lastKnownRsi; }
-    public SignalEvaluatorService.Signal.Type getLastSignalType() { return lastKnownSignal; }
-    public Instant getLastExecutionTime() { return lastExecutionTime; }
-
-    private static final double PRICE_CHANGE_THRESHOLD = 1.0;
-
     // ✅ RSI incremental
     private Double avgGain = null;
     private Double avgLoss = null;
     private Double lastRsiValue = null;
 
-    // ✅ Últimos precios (solo 20 necesarios)
+    // ✅ Últimos precios
     private final List<Double> recentPrices = new ArrayList<>();
 
-    @Autowired
     public BitcoinPriceService(CoinGeckoClient coinGeckoClient,
                                SignalEvaluatorService signalEvaluator,
-                               WhatsAppNotifier notifier) {
+                               WhatsAppNotifier notifier,
+                               BotProperties config) {
         this.coinGeckoClient = coinGeckoClient;
         this.signalEvaluator = signalEvaluator;
         this.notifier = notifier;
+        this.config = config;
     }
 
-    public void process() {
+    // ✅ Getters para /status
+    public Double getLastKnownPrice() { return lastKnownPrice; }
+    public Double getLastKnownRsi() { return lastKnownRsi; }
+    public SignalEvaluatorService.Signal.Type getLastSignalType() { return lastKnownSignal; }
+    public Instant getLastExecutionTime() { return lastExecutionTime; }
 
+    public void process() {
         List<PricePoint> prices = safeList(coinGeckoClient.getLastHourlyPrices(48));
 
         if (prices.isEmpty()) {
-            System.out.println("⚠️ No hay datos de precios disponibles (CoinGecko falló y no hay caché).");
+            System.out.println("⚠️ No hay datos de precios disponibles");
             return;
         }
 
@@ -84,7 +84,6 @@ public class BitcoinPriceService {
         // ✅ Guardar últimos valores
         lastPrice = price;
         lastRsi = rsi;
-
         lastKnownPrice = price;
         lastKnownRsi = rsi;
         lastKnownSignal = signal != null ? signal.getType() : SignalEvaluatorService.Signal.Type.HOLD;
@@ -96,17 +95,20 @@ public class BitcoinPriceService {
         return list != null ? list : Collections.emptyList();
     }
 
-    // ✅ RSI incremental
+    // ✅ RSI incremental con configuración desde properties
     private double updateRsiIncremental(double newPrice) {
+        int recentLimit = config.getBitcoin().getPrice().getRecentPricesLimit();
+        int minDataPoints = config.getBitcoin().getRsi().getMinDataPoints();
+        int period = config.getBitcoin().getRsi().getPeriod();
 
         // Guardar precio
         recentPrices.add(newPrice);
-        if (recentPrices.size() > 20) {
+        if (recentPrices.size() > recentLimit) {
             recentPrices.remove(0);
         }
 
         // ✅ Si no hay suficientes datos → RSI inicial
-        if (recentPrices.size() < 15) {
+        if (recentPrices.size() < minDataPoints) {
             return calculateInitialRsi();
         }
 
@@ -121,9 +123,9 @@ public class BitcoinPriceService {
             return calculateInitialRsi();
         }
 
-        // ✅ RSI incremental
-        avgGain = ((avgGain * 13) + gain) / 14;
-        avgLoss = ((avgLoss * 13) + loss) / 14;
+        // ✅ RSI incremental con período configurable
+        avgGain = ((avgGain * (period - 1)) + gain) / period;
+        avgLoss = ((avgLoss * (period - 1)) + loss) / period;
 
         if (avgLoss == 0) {
             lastRsiValue = 100.0;
@@ -136,22 +138,26 @@ public class BitcoinPriceService {
         return lastRsiValue;
     }
 
-    // ✅ RSI inicial (solo se ejecuta una vez)
+    // ✅ RSI inicial con configuración desde properties
     private double calculateInitialRsi() {
+        int minDataPoints = config.getBitcoin().getRsi().getMinDataPoints();
+        int period = config.getBitcoin().getRsi().getPeriod();
 
-        if (recentPrices.size() < 15) return 50.0;
+        if (recentPrices.size() < minDataPoints) {
+            return 50.0;
+        }
 
         double gains = 0;
         double losses = 0;
 
-        for (int i = 1; i < 15; i++) {
+        for (int i = 1; i < minDataPoints; i++) {
             double diff = recentPrices.get(i) - recentPrices.get(i - 1);
             if (diff > 0) gains += diff;
             else losses -= diff;
         }
 
-        avgGain = gains / 14;
-        avgLoss = losses / 14;
+        avgGain = gains / period;
+        avgLoss = losses / period;
 
         if (avgLoss == 0) return 100.0;
 
@@ -161,62 +167,51 @@ public class BitcoinPriceService {
         return lastRsiValue;
     }
 
+    // ✅ Actualización periódica con template desde properties
     private void sendPeriodicUpdate(double price, double rsi) {
-
-        String msg =
-                "📊 *Actualización BTC (30 min)*\n\n" +
-                "*Precio:* $%,.0f USD\n" +
-                "*RSI(14):* %.2f\n\n" +
-                "https://www.tradingview.com/x/BTCUSD_1h.png";
-
-        msg = msg.formatted(price, rsi);
-
+        String template = config.getNotification().getTemplate().getPeriodic();
+        String msg = String.format(template, price, rsi);
         notifier.sendMessage(msg);
     }
 
+    // ✅ Alerta de cambio de precio con threshold configurable
     private void checkPriceChange(double price) {
         if (lastPrice == null || lastPrice == 0.0) return;
 
         double change = ((price - lastPrice) / lastPrice) * 100;
+        double threshold = config.getBitcoin().getPrice().getChangeThreshold();
 
-        if (Math.abs(change) >= PRICE_CHANGE_THRESHOLD) {
-
-            String msg =
-                    "🚨 *Movimiento fuerte en BTC*\n\n" +
-                    "Cambio: %.2f%%\n" +
-                    "Precio actual: $%,.0f USD\n\n" +
-                    "https://www.tradingview.com/x/BTCUSD_1h.png";
-
-            msg = msg.formatted(change, price);
-
+        if (Math.abs(change) >= threshold) {
+            String template = config.getNotification().getTemplate().getPriceChange();
+            String msg = String.format(template, change, price);
             notifier.sendMessage(msg);
         }
     }
 
+    // ✅ Cruces de RSI con niveles configurables
     private void checkRSICross(double rsi, double price) {
         if (lastRsi == null || lastRsi == 0.0) return;
 
-        if (lastRsi > 70 && rsi <= 70) {
-            String msg =
-                    "🔻 *RSI cruza hacia abajo 70 (sobrecompra)*\n\n" +
-                    "Precio: $%,.0f\n" +
-                    "RSI: %.2f";
+        int overboughtLevel = config.getBitcoin().getRsi().getOverboughtLevel();
+        int oversoldLevel = config.getBitcoin().getRsi().getOversoldLevel();
 
-            notifier.sendMessage(msg.formatted(price, rsi));
+        // Cruce hacia abajo del nivel de sobrecompra
+        if (lastRsi > overboughtLevel && rsi <= overboughtLevel) {
+            String template = config.getNotification().getTemplate().getRsiDown70();
+            String msg = String.format(template, price, rsi);
+            notifier.sendMessage(msg);
         }
 
-        if (lastRsi < 30 && rsi >= 30) {
-            String msg =
-                    "🔼 *RSI cruza hacia arriba 30 (sobreventa)*\n\n" +
-                    "Precio: $%,.0f\n" +
-                    "RSI: %.2f";
-
-            notifier.sendMessage(msg.formatted(price, rsi));
+        // Cruce hacia arriba del nivel de sobreventa
+        if (lastRsi < oversoldLevel && rsi >= oversoldLevel) {
+            String template = config.getNotification().getTemplate().getRsiUp30();
+            String msg = String.format(template, price, rsi);
+            notifier.sendMessage(msg);
         }
     }
 
+    // ✅ Señales clásicas RSI con template configurable
     private SignalEvaluatorService.Signal checkClassicSignal(List<PricePoint> prices, double price, double rsi) {
-
         SignalEvaluatorService.Signal signal = signalEvaluator.evaluateRsiSignal(prices);
 
         if (signal == null || !signal.isActive()) {
@@ -224,18 +219,14 @@ public class BitcoinPriceService {
             return signal;
         }
 
-        if (signal.getType() == lastSignalType) return signal;
+        if (signal.getType() == lastSignalType) {
+            return signal;
+        }
 
         lastSignalType = signal.getType();
 
-        String msg =
-                "*SEÑAL BTC AUTOMÁTICA - RSI 14*\n\n" +
-                "%s\n\n" +
-                "*Precio actual:* $%,.0f USD\n" +
-                "*RSI(14):* %.2f\n\n" +
-                "https://www.tradingview.com/x/BTCUSD_1h.png";
-
-        msg = msg.formatted(
+        String template = config.getNotification().getTemplate().getClassicSignal();
+        String msg = String.format(template,
                 signal.getType().getMessage(),
                 price,
                 rsi
